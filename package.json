@@ -1,0 +1,16 @@
+{
+  "name": "@drumee/finder-integration-phase48",
+  "version": "0.0.0-phase4.8",
+  "private": true,
+  "description": "Integrated Phase 4.8 Finder; not a standalone Finder package.",
+  "type": "commonjs",
+  "main": "lib/index.js",
+  "scripts": { "test": "node --test test/*.test.js" },
+  "peerDependencies": {
+    "@drumee/ui-runtime": ">=0.1.0-alpha.2 <0.2.0",
+    "@drumee/window-manager": ">=0.1.0-alpha.2 <0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@drumee/window-manager": { "optional": true }
+  }
+}

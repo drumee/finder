@@ -10,6 +10,7 @@ const { normalizedRectangle, intersects } = require("../lib/geometry");
 const { FinderTransferPolicy } = require("../lib/transfer-policy");
 const { DownloadController } = require("../lib/download-controller");
 const { UploadController, bundleEntry, forestFromFiles, scanDataTransfer } = require("../lib/upload-controller");
+const { MfsTransferClient } = require("../lib/mfs-transfer-client");
 
 const hub_x = "a000000000000001";
 const hub_y = "b000000000000002";
@@ -131,8 +132,8 @@ test("file-picker paths form a recursive forest and chunk uploads are bounded an
     chunk_concurrency: 2,
     mfs_client: { async mkdir(destination, name) { return { result: { hub_id: destination.hub_id, nid: `${destination.nid}-${name}`, filename: name } }; } },
     transfer_client: {
-      async uploadStart() { return { transfer_id: "chunked-1" }; },
-      async uploadChunk({ index }) { const count = (attempts.get(index) || 0) + 1; attempts.set(index, count); if (index === 1 && count === 1) throw new Error("retry"); },
+      async uploadStart() { return { transfer_id: "chunked-1", chunk_size: 2 }; },
+      async uploadChunk({ index }, body) { assert.ok(body instanceof Blob); const count = (attempts.get(index) || 0) + 1; attempts.set(index, count); if (index === 1 && count === 1) throw new Error("retry"); return { uploaded: Math.min(6, (index + 1) * 2) }; },
       async uploadComplete() { return { result: { hub_id: hub_x, nid: "9000000000000002" } }; },
       async uploadAbort() {}
     }
@@ -142,6 +143,19 @@ test("file-picker paths form a recursive forest and chunk uploads are bounded an
   assert.equal(attempts.size, 3);
   assert.equal(attempts.get(1), 2);
   assert.ok(progress.length >= 4);
+});
+
+test("MfsTransferClient keeps binary chunks out of structured service calls", async () => {
+  const calls = [];
+  const client = new MfsTransferClient({ transport: {
+    postService(service, input) { calls.push(["structured", service, input]); return {}; },
+    uploadBinary(service, input, body) { calls.push(["binary", service, input, body]); return { uploaded: body.size }; }
+  } });
+  await client.uploadStart({ size: 7 });
+  const body = new Blob(["payload"]);
+  await client.uploadChunk({ transfer_id: "upload-1", index: 0 }, body);
+  assert.deepEqual(calls.map((entry) => entry.slice(0, 2)), [["structured", "mfs-transfer.upload_start"], ["binary", "mfs-transfer.upload_chunk"]]);
+  assert.equal(calls[1][3], body);
 });
 
 test("download controller waits for async archives, retrieves bytes and releases the job", async () => {
@@ -166,4 +180,6 @@ test("production Finder code contains no historical global selection or Desk cou
   for (const forbidden of ["Wm.getGlobalSelection", "window.Selector", "RADIO_POINTER", "Wm.capture", "@drumee/system-mfs"]) assert.equal(source.includes(forbidden), false, forbidden);
   const finder_source = fs.readFileSync(path.join(root, "finder.js"), "utf8");
   assert.equal(finder_source.includes("@drumee/window-manager"), false);
+  const upload_source = fs.readFileSync(path.join(root, "upload-controller.js"), "utf8");
+  assert.doesNotMatch(upload_source, /Array\.from\s*\(\s*new Uint8Array|\.arrayBuffer\s*\(/);
 });

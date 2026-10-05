@@ -48,6 +48,9 @@ Normal click replaces selection, the checkbox toggles membership, marquee
 selection replaces membership after a five-pixel threshold, and drag payloads
 come only from FinderSelection. Same-hub drag is MOVE; cross-hub drag is COPY.
 Backend ACL and MFS semantics remain authoritative.
+Same-hub MOVE is projected optimistically and converges with committed sync;
+failures reconcile affected scopes. Cross-hub COPY waits for server-assigned
+destination identities.
 
 Uploads use bounded structured control calls plus `Blob` binary chunks.
 Downloads prepare offline artifacts and return FileIo/Nginx retrieval URLs;

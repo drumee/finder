@@ -80,6 +80,10 @@ each open Finder scope.
 `FinderTransferPolicy.transfer({source,target,items,operation_id})` chooses
 MOVE when source and destination hubs match and COPY otherwise. The backend
 remains authoritative for permission and ancestor-cycle validation.
+Same-hub MOVE projects an optimistic logical update and converges with the
+committed event by identity/`operation_id`; failure refreshes affected scopes.
+Cross-hub COPY is not optimistic because destination identities are assigned
+by the backend.
 
 `FinderWindow` requires `{manager, runtime, finder_options, window_options}`.
 It creates one Finder, passes its DOM element to `manager.open`, projects

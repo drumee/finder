@@ -12,10 +12,19 @@ const { DownloadController } = require("../lib/download-controller");
 const { UploadController, bundleEntry, forestFromFiles, scanDataTransfer } = require("../lib/upload-controller");
 const { MfsTransferClient } = require("../lib/mfs-transfer-client");
 const { MediaClient } = require("../lib/media-client");
+const { normalizePublicNode } = require("../lib/public-node");
 
 const hub_x = "a000000000000001";
 const hub_y = "b000000000000002";
 const location_x = { hub_id: hub_x, nid: "1000000000000001" };
+
+test("public nodes normalize logical parents and exclude physical fields", () => {
+  const node = normalizePublicNode({ nid: "2000000000000001", parent_id: location_x.nid, filename: "safe.txt", filetype: "file", db_name: "private", storage_ref: "/private", payload_ref: { path: "/private" } }, hub_x);
+  assert.deepEqual(node.parent, location_x);
+  assert.equal(node.db_name, undefined);
+  assert.equal(node.storage_ref, undefined);
+  assert.equal(node.payload_ref, undefined);
+});
 
 test("single, checkbox and drag semantics share one selection authority", () => {
   const selection = new FinderSelection();

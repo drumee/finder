@@ -11,3 +11,6 @@ separate `MfsClient` and `MfsTransferClient` contracts.
 Structural UI is LETC/Skeletons. `ItemList` deliberately owns a delegated raw
 HTML tile renderer for dense directories. Canonical identities are always
 `{hub_id,nid}`.
+
+The Phase 4.9 extraction contracts and resource ownership are frozen in
+`CONTRACTS.md`.

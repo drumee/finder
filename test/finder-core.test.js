@@ -11,6 +11,7 @@ const { FinderTransferPolicy } = require("../lib/transfer-policy");
 const { DownloadController } = require("../lib/download-controller");
 const { UploadController, bundleEntry, forestFromFiles, scanDataTransfer } = require("../lib/upload-controller");
 const { MfsTransferClient } = require("../lib/mfs-transfer-client");
+const { MediaClient } = require("../lib/media-client");
 
 const hub_x = "a000000000000001";
 const hub_y = "b000000000000002";
@@ -45,6 +46,16 @@ test("transfer policy moves within a hub and copies across hubs", async () => {
   assert.equal((await policy.transfer({ source: { location: location_x }, target: { location: { hub_id: hub_x, nid: "1000000000000002" } }, items: [item] })).action, "move");
   assert.equal((await policy.transfer({ source: { location: location_x }, target: { location: { hub_id: hub_y, nid: "1000000000000003" } }, items: [item] })).action, "copy");
   assert.deepEqual(calls.map((call) => call[0]), ["move", "copy"]);
+  await assert.rejects(() => policy.transfer({ source: { location: location_x }, target: { location: item }, items: [item] }), { code: "MFS_DESTINATION_INVALID" });
+});
+
+test("MediaClient exposes allowlisted logical representation URLs only", () => {
+  const calls = [];
+  const client = new MediaClient({ transport: { serviceUrl(service, node) { calls.push([service, node]); return `/-/svc/${service}?hub_id=${node.hub_id}&nid=${node.nid}`; } } });
+  const url = client.representation({ ...location_x, db_name: "private", storage_ref: "/private" }, "thumb");
+  assert.match(url, /^\/-\/svc\/media\.thumb\?/);
+  assert.deepEqual(calls[0], ["media.thumb", location_x]);
+  assert.throws(() => client.representation(location_x, "generator-name"), { code: "MEDIA_REPRESENTATION_INVALID" });
 });
 
 test("MfsSync filters scopes, deduplicates echoes, reconciles and unregisters", async () => {
@@ -62,6 +73,38 @@ test("MfsSync filters scopes, deduplicates echoes, reconciles and unregisters", 
   assert.ok(calls.some((entry) => entry[0] === "refresh-a"));
   remove_b(); sync.destroy();
   assert.equal(listeners.size, 0);
+});
+
+test("MfsSync routes changes to the open node itself and binds only once", async () => {
+  const bound = [];
+  const unbound = [];
+  const websocket = {
+    bindEvent(name, listener) { bound.push([name, listener]); },
+    unbindEvent(name, listener) { unbound.push([name, listener]); },
+    on(name, listener) { bound.push([name, listener]); },
+    off(name, listener) { unbound.push([name, listener]); }
+  };
+  const sync = new MfsSync({ websocket });
+  const events = [];
+  const finder = {
+    finder_id: "open-folder",
+    location: location_x,
+    hasItem: () => false,
+    applyMfsEvent: (event) => events.push(event.type),
+    refresh: async () => {}
+  };
+  sync.register(finder);
+  bound.find(([name]) => name === "mfs.event")[1]({
+    type: "node.renamed",
+    operation_id: "rename-open-folder",
+    node: location_x,
+    result: { ...location_x, filename: "Renamed" }
+  });
+  assert.deepEqual(events, ["node.renamed"]);
+  sync.destroy();
+  sync.destroy();
+  assert.deepEqual(bound.map(([name]) => name), ["mfs.event", "connected"]);
+  assert.deepEqual(unbound.map(([name]) => name), ["mfs.event", "connected"]);
 });
 
 test("mixed upload forest preserves explicit empty folders and uploads into real parent nids", async () => {
@@ -145,6 +188,28 @@ test("file-picker paths form a recursive forest and chunk uploads are bounded an
   assert.ok(progress.length >= 4);
 });
 
+test("upload resume skips committed chunks and invalid geometry retains no active transfer", async () => {
+  const sent = [];
+  const resumed = new UploadController({
+    mfs_client: {},
+    transfer_client: {
+      async uploadStart() { return { transfer_id: "resume-1", chunk_size: 2, chunks: [0, 2] }; },
+      async uploadChunk({ index }) { sent.push(index); return { uploaded: 6 }; },
+      async uploadComplete() { return { result: { ...location_x, nid: "resume-node" } }; },
+      async uploadAbort() {}
+    }
+  });
+  const source = new Blob(["abcdef"]);
+  await resumed.uploadFile(bundleEntry("file", "resume.txt", "resume.txt", source), location_x);
+  assert.deepEqual(sent, [1]);
+  const invalid = new UploadController({
+    mfs_client: {},
+    transfer_client: { async uploadStart() { return { transfer_id: "invalid-1", chunk_size: -1 }; }, async uploadAbort() {} }
+  });
+  await assert.rejects(() => invalid.uploadFile(bundleEntry("file", "invalid.txt", "invalid.txt", source), location_x), /invalid chunk geometry/);
+  assert.equal(invalid.active.size, 0);
+});
+
 test("MfsTransferClient keeps binary chunks out of structured service calls", async () => {
   const calls = [];
   const client = new MfsTransferClient({ transport: {
@@ -158,19 +223,37 @@ test("MfsTransferClient keeps binary chunks out of structured service calls", as
   assert.equal(calls[1][3], body);
 });
 
-test("download controller waits for async archives, retrieves bytes and releases the job", async () => {
+test("download controller delegates Nginx retrieval without buffering archive bytes", async () => {
   const calls = [];
   let polls = 0;
   const controller = new DownloadController({ transfer_client: {
     async downloadPrepare({ roots }) { calls.push(["prepare", roots]); return { transfer_id: "download-1", status: "preparing" }; },
     async downloadStatus() { calls.push(["status"]); return { transfer_id: "download-1", status: ++polls > 1 ? "ready" : "preparing" }; },
-    async downloadRetrieve() { calls.push(["retrieve"]); return { data: [80, 75, 3, 4], content_type: "application/zip" }; },
+    async downloadRetrieve() { calls.push(["retrieve"]); return { url: "/-/svc/mfs-transfer.download_retrieve?transfer_id=download-1", filename: "archive.zip" }; },
     async downloadRelease() { calls.push(["release"]); return { released: true }; },
     async downloadCancel() { calls.push(["cancel"]); return { cancelled: true }; }
   } });
-  const result = await controller.download([{ hub_id: hub_x, nid: "7000000000000001" }, { hub_id: hub_y, nid: "7000000000000002" }], { document: null, URL: null });
-  assert.deepEqual(result.data, [80, 75, 3, 4]);
-  assert.deepEqual(calls.map((call) => call[0]), ["prepare", "status", "status", "retrieve", "release"]);
+  const anchor = { click() { calls.push(["click", this.href]); }, remove() {}, hidden: false };
+  const document = { body: { append() {} }, createElement() { return anchor; } };
+  const URL = { createObjectURL() { throw new Error("archive bytes must not be buffered into a Blob URL"); }, revokeObjectURL() {} };
+  const result = await controller.download([{ hub_id: hub_x, nid: "7000000000000001" }, { hub_id: hub_y, nid: "7000000000000002" }], { document, URL });
+  assert.equal(result.url, "/-/svc/mfs-transfer.download_retrieve?transfer_id=download-1");
+  assert.equal(Object.hasOwn(result, "data"), false);
+  assert.deepEqual(calls.map((call) => call[0]), ["prepare", "status", "status", "retrieve", "click", "release"]);
+  assert.equal(anchor.href, result.url);
+  assert.equal(controller.active.size, 0);
+});
+
+test("failed download retrieval releases its bounded server artifact", async () => {
+  const calls = [];
+  const controller = new DownloadController({ transfer_client: {
+    async downloadPrepare() { return { transfer_id: "failed-1", status: "ready" }; },
+    async downloadRetrieve() { calls.push("retrieve"); throw Object.assign(new Error("network disconnected"), { code: "NETWORK_DISCONNECTED" }); },
+    async downloadRelease() { calls.push("release"); return { released: true }; },
+    async downloadCancel() { calls.push("cancel"); return { cancelled: true }; }
+  } });
+  await assert.rejects(() => controller.download([{ ...location_x, nid: "failed-node" }], { document: null, URL: null }), { code: "NETWORK_DISCONNECTED" });
+  assert.deepEqual(calls, ["retrieve", "release"]);
   assert.equal(controller.active.size, 0);
 });
 

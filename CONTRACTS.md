@@ -37,6 +37,14 @@ A location is exactly `{ hub_id, nid }`. A public node contains at least:
 the service boundary and is normalized. Physical storage and database fields
 are stripped and are not part of either contract.
 
+The Hub identity on every location is a client selection only. The server
+authorizes each logical source and destination independently, requires
+`system-mfs` ready on that Hub, applies the operation's Hub permission bit and
+then retains the existing node-level MFS permission check. No mutable global
+Hub context is part of the Finder contract, so simultaneous windows may target
+different Hubs. Transfers, media requests and reconnect operations retain the
+same rule for their complete lifetime.
+
 ## Service clients
 
 `MfsClient` consumes `list(location, options)`, `get(node)`,
@@ -84,6 +92,19 @@ Same-hub MOVE projects an optimistic logical update and converges with the
 committed event by identity/`operation_id`; failure refreshes affected scopes.
 Cross-hub COPY is not optimistic because destination identities are assigned
 by the backend.
+
+Click replaces selection; checkbox and Ctrl/Command-click toggle it;
+Shift-click and Shift-arrow select a contiguous range. Arrow keys move the
+focused selection, Space toggles, Ctrl/Command-A selects the loaded page,
+Enter opens a folder and Backspace navigates up. Grid and compact list modes
+share the same logical collection. Context-menu requests expose a bounded
+command descriptor to the host rather than importing a global Desk menu.
+
+Successful same-Hub moves create a bounded session-local undo entry. Undo
+submits a new authorized MFS move and reconciles the view; it never rewinds
+server state locally. Cross-Hub copy has no synthetic undo because destination
+identities and conflict policy belong to the server. Conflict codes are
+presented explicitly and followed by reconciliation.
 
 `FinderWindow` requires `{manager, runtime, finder_options, window_options}`.
 It creates one Finder, passes its DOM element to `manager.open`, projects

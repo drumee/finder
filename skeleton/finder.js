@@ -4,7 +4,7 @@ module.exports = function finderSkeleton(finder) {
   const { Skeletons } = finder.runtime;
   const button = (service, label) => Skeletons.Button.Label({ className: `drumee-finder__action drumee-finder__action--${service}`, content: label, service, uiHandler: finder, partHandler: finder, tagName: "button", attributes: { type: "button" } });
   const result = [
-    Skeletons.Box.X({ className: "drumee-finder__toolbar", sys_pn: "toolbar", partHandler: finder, kids: [button("back", "Back"), button("forward", "Forward"), button("up", "Up"), button("upload", "Upload"), button("download", "Download")] }),
+    Skeletons.Box.X({ className: "drumee-finder__toolbar", sys_pn: "toolbar", partHandler: finder, kids: [button("back", "Back"), button("forward", "Forward"), button("up", "Up"), button("upload", "Upload"), button("download", "Download"), button("view", "View"), button("undo", "Undo")] }),
     Skeletons.Button.Label({ className: "drumee-finder__breadcrumb", sys_pn: "breadcrumb", partHandler: finder, uiHandler: finder, service: "breadcrumb-root", tagName: "button", attributes: { type: "button" }, content: "/" }),
     Skeletons.Box.Y({ className: "drumee-finder__content", sys_pn: "content", partHandler: finder, kids: [
       { kind: "finder_item_list", className: "drumee-finder__items", sys_pn: "item-list", partHandler: finder, finder },

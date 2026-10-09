@@ -63,9 +63,18 @@ its sync registration, listeners and observers. `destroy()` is idempotent.
 Locally created transfer controllers are cancelled on destroy; injected
 controllers remain host-owned unless explicit ownership flags are set.
 
+Each request carries only opaque logical `{hub_id,nid}` identities. The
+browser-selected Hub is a request, not authority: the server runtime must
+authorize every source and destination Hub, require the `system-mfs`
+capability to be ready, then apply node-level MFS permission checks. Finder
+never receives or selects `hub_context`, shard names, SQL hosts, credentials,
+or filesystem roots. Separate Finder windows therefore retain separate
+locations without a mutable global Hub context.
+
 See `CONTRACTS.md` for the frozen API and resource ownership map.
 
 ## Package status
 
-This is an alpha CommonJS/Webpack capability. It is prepared for validation
-but Phase 4.9 does not authorize npm publication.
+This is an alpha CommonJS/Webpack capability. Version `0.1.0-alpha.2` is
+prepared locally for the official Hub-context integration; this work does not
+publish it to npm.

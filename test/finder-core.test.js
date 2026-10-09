@@ -37,6 +37,17 @@ test("single, checkbox and drag semantics share one selection authority", () => 
   assert.deepEqual(selection.getItems(), [c]);
 });
 
+test("modifier range selection is ordered, reversible and optionally additive", () => {
+  const selection = new FinderSelection();
+  const items = [1, 2, 3, 4].map((serial) => ({ hub_id: hub_x, nid: String(serial).padStart(16, "0") }));
+  selection.selectRange(items, items[1], items[3]);
+  assert.deepEqual(selection.getItems(), items.slice(1));
+  selection.selectRange(items, items[2], items[0]);
+  assert.deepEqual(selection.getItems(), items.slice(0, 3));
+  selection.selectRange(items, items[3], items[3], { additive: true });
+  assert.deepEqual(selection.getItems(), items);
+});
+
 test("marquee geometry normalizes every direction and uses inclusive intersection", () => {
   for (const point of [{ x: 40, y: 50 }, { x: 0, y: 0 }, { x: 40, y: 0 }, { x: 0, y: 50 }]) {
     const rect = normalizedRectangle({ x: 20, y: 25 }, point);

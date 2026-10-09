@@ -52,6 +52,10 @@ same rule for their complete lifetime.
 `remove(node, operation_id)`, `move(nodes, destination, operation_id)`, and
 `copy(nodes, destination, operation_id)`.
 
+The public JavaScript copy method keeps the `nodes` argument for symmetry with
+move, but its wire DTO uses the canonical backend field `{sources,
+destination, operation_id}`.
+
 `MfsTransferClient` consumes upload start, binary chunk, status, complete and
 abort operations, plus download prepare, status, cancel, retrieve and release.
 Upload bodies are `Blob` objects sent through `uploadBinary`; they never enter
@@ -105,6 +109,11 @@ submits a new authorized MFS move and reconciles the view; it never rewinds
 server state locally. Cross-Hub copy has no synthetic undo because destination
 identities and conflict policy belong to the server. Conflict codes are
 presented explicitly and followed by reconciliation.
+
+The source location and inverse DTO are snapshotted before the original move
+awaits its server response. Navigation while the request is pending cannot
+retarget undo. A failed move creates no entry; a denied inverse keeps its entry
+available for a later authorized retry and refreshes the affected views.
 
 `FinderWindow` requires `{manager, runtime, finder_options, window_options}`.
 It creates one Finder, passes its DOM element to `manager.open`, projects

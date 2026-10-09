@@ -13,10 +13,24 @@ const { UploadController, bundleEntry, forestFromFiles, scanDataTransfer } = req
 const { MfsTransferClient } = require("../lib/mfs-transfer-client");
 const { MediaClient } = require("../lib/media-client");
 const { normalizePublicNode } = require("../lib/public-node");
+const { Finder } = require("../lib/finder");
+const { MfsClient } = require("../lib/mfs-client");
 
 const hub_x = "a000000000000001";
 const hub_y = "b000000000000002";
 const location_x = { hub_id: hub_x, nid: "1000000000000001" };
+
+test("MfsClient uses the canonical sources field for copy requests", async () => {
+  let request;
+  const client = new MfsClient({ transport: { async call(service, input) { request = { service, input }; } } });
+  const source = { hub_id: hub_x, nid: "2000000000000001" };
+  const destination = { hub_id: hub_y, nid: "2000000000000002" };
+  await client.copy([source], destination, "copy-operation");
+  assert.deepEqual(request, {
+    service: "mfs.copy",
+    input: { sources: [source], destination, operation_id: "copy-operation" }
+  });
+});
 
 test("public nodes normalize logical parents and exclude physical fields", () => {
   const node = normalizePublicNode({ nid: "2000000000000001", parent_id: location_x.nid, filename: "safe.txt", filetype: "file", db_name: "private", storage_ref: "/private", payload_ref: { path: "/private" } }, hub_x);
@@ -67,6 +81,44 @@ test("transfer policy moves within a hub and copies across hubs", async () => {
   assert.equal((await policy.transfer({ source: { location: location_x }, target: { location: { hub_id: hub_y, nid: "1000000000000003" } }, items: [item] })).action, "copy");
   assert.deepEqual(calls.map((call) => call[0]), ["move", "copy"]);
   await assert.rejects(() => policy.transfer({ source: { location: location_x }, target: { location: item }, items: [item] }), { code: "MFS_DESTINATION_INVALID" });
+});
+
+test("move undo captures its source before awaiting and survives later navigation", async () => {
+  let complete;
+  const item = { hub_id: hub_x, nid: "3000000000000002", parent_id: location_x.nid, filename: "move.txt", filetype: "file" };
+  const source = {
+    location: { ...location_x },
+    selection: { getItems: () => [item] },
+    pending_operations: new Map(), items: new Map([[`${item.hub_id}:${item.nid}`, item]]), item_list: { remove() {} }, undo_stack: [],
+    transfer_policy: { transfer: () => new Promise((resolve) => { complete = resolve; }) },
+    presentError() {}, refresh: async () => {}, trigger() {},
+    mfs_client: { async move(nodes, destination) { source.inverse = { nodes, destination }; } }
+  };
+  const target = { finder: source, location: { hub_id: hub_x, nid: "1000000000000002" } };
+  const moving = Finder.prototype.transferTo.call(source, target);
+  source.location = { hub_id: hub_x, nid: "1000000000000009" };
+  complete({ ok: true });
+  await moving;
+  assert.deepEqual(source.undo_stack[0].destination, location_x);
+  assert.equal(await Finder.prototype.undoLast.call(source), true);
+  assert.deepEqual(source.inverse.destination, location_x);
+});
+
+test("failed moves create no undo entry and denied inverse remains retryable", async () => {
+  const item = { hub_id: hub_x, nid: "3000000000000003", parent_id: location_x.nid, filename: "move.txt", filetype: "file" };
+  const source = {
+    location: { ...location_x }, selection: { getItems: () => [item] }, pending_operations: new Map(),
+    items: new Map([[`${item.hub_id}:${item.nid}`, item]]), item_list: { remove() {} }, undo_stack: [],
+    transfer_policy: { async transfer() { throw Object.assign(new Error("denied"), { code: "PERMISSION_DENIED" }); } },
+    presentError(error, context) { source.error = { code: error.code, context }; }, refresh: async () => {}, trigger() {}
+  };
+  await assert.rejects(() => Finder.prototype.transferTo.call(source, { finder: source, location: { hub_id: hub_x, nid: "1000000000000002" } }), { code: "PERMISSION_DENIED" });
+  assert.equal(source.undo_stack.length, 0);
+  source.undo_stack.push({ type: "move", items: [{ hub_id: item.hub_id, nid: item.nid }], destination: { ...location_x } });
+  source.mfs_client = { async move() { throw Object.assign(new Error("revoked"), { code: "PERMISSION_DENIED" }); } };
+  await assert.rejects(() => Finder.prototype.undoLast.call(source), { code: "PERMISSION_DENIED" });
+  assert.equal(source.undo_stack.length, 1);
+  assert.deepEqual(source.error, { code: "PERMISSION_DENIED", context: "undo" });
 });
 
 test("MediaClient exposes allowlisted logical representation URLs only", () => {

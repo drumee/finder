@@ -75,6 +75,6 @@ See `CONTRACTS.md` for the frozen API and resource ownership map.
 
 ## Package status
 
-This is an alpha CommonJS/Webpack capability. Version `0.1.0-alpha.2` is
+This is an alpha CommonJS/Webpack capability. Version `0.1.0-alpha.3` is
 prepared locally for the official Hub-context integration; this work does not
 publish it to npm.

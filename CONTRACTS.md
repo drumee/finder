@@ -33,6 +33,28 @@ A location is exactly `{ hub_id, nid }`. A public node contains at least:
 { hub_id, nid, parent, filetype, filename }
 ```
 
+Authorized list and resolution responses may also contain:
+
+```js
+{
+  privilege,        // effective node privilege word for this caller
+  hub_privilege,    // effective Hub privilege word for this caller
+  access: {
+    known,
+    hub_privilege,
+    node_privilege,
+    permission: { read, write, delete, admin, owner }
+  }
+}
+```
+
+The requested-bit values are a browser-safe projection derived from the
+canonical server constants; Finder defines no numeric ACL hierarchy. The two
+privilege words are evaluated independently with the operation's requested
+bit. `known: false` is not a denial and triggers authorized node resolution.
+The DTO contains only the current caller's effective access, never ACL
+membership or another principal's values.
+
 `parent` is a logical `{hub_id,nid}` identity. `parent_id` remains accepted at
 the service boundary and is normalized. Physical storage and database fields
 are stripped and are not part of either contract.
@@ -78,9 +100,21 @@ representations. Finder normally requests `thumb`, `document`, `video`, or
   source_parent,
   destination,
   result,
+  reconcile,
   hard_delete
 }
 ```
+
+`reconcile` is an array of authorized folder identities `{hub_id,nid}`. The
+server adds it only when post-mutation recipient projection cannot safely
+retain the identity required for an incremental removal, notably a move into
+an inaccessible folder or a hard deletion. It is derived from trusted mutation
+context, and each folder is reauthorized for the recipient. Hidden node and
+destination identities are not restored. MfsSync refreshes every registered
+Finder showing that folder and leaves unrelated views untouched. Finder
+coalesces repeated invalidations, performs a follow-up refresh when one arrives
+during an in-flight refresh, discards navigation-obsolete results, reconciles
+selection, reports refresh errors and stops after destruction.
 
 Supported types are `node.created`, `node.renamed`, `node.removed`,
 `node.moved`, and `node.copied`. Scope matching uses logical identities only.
@@ -96,6 +130,18 @@ Same-hub MOVE projects an optimistic logical update and converges with the
 committed event by identity/`operation_id`; failure refreshes affected scopes.
 Cross-hub COPY is not optimistic because destination identities are assigned
 by the backend.
+
+The shared access-policy helper guides menus, keyboard and toolbar commands,
+uploads, downloads, undo and drag/drop. It uses only server-provided access
+metadata and never replaces server authorization. A same-Hub move requires
+source delete plus destination write; a cross-Hub copy requires source read
+plus destination write. Every source and the destination must pass. A current
+parent drop is a no-op with no request or undo entry, while mixed no-op or
+denied selections fail as one operation. Unknown destination access is
+resolved and coalesced before acceptance; generation checks prevent stale
+responses from surviving access invalidation. Drag feedback distinguishes
+pending, move, copy, no-op and unavailable states. A denied server response
+invalidates cached access and reconciles optimistic state.
 
 Click replaces selection; checkbox and Ctrl/Command-click toggle it;
 Shift-click and Shift-arrow select a contiguous range. Arrow keys move the
@@ -114,6 +160,8 @@ The source location and inverse DTO are snapshotted before the original move
 awaits its server response. Navigation while the request is pending cannot
 retarget undo. A failed move creates no entry; a denied inverse keeps its entry
 available for a later authorized retry and refreshes the affected views.
+Undo resolves the moved nodes and original folder again, so current inverse
+permissions, not historical authorization, decide whether it can run.
 
 `FinderWindow` requires `{manager, runtime, finder_options, window_options}`.
 It creates one Finder, passes its DOM element to `manager.open`, projects

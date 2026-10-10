@@ -8,9 +8,11 @@ const window_manager_api = require("@drumee/window-manager/browser");
 runtime_api.bootstrap().then(async (runtime) => {
   finder_api.registerFinderKinds(runtime);
   const root = { hub_id: "a000000000000001", nid: "1000000000000001" };
+  const permission = { read: 2, write: 4, delete: 8, admin: 16, owner: 32 };
+  const accessible = (node) => ({ ...node, privilege: 63, hub_privilege: 63, access: { known: true, hub_privilege: 63, node_privilege: 63, permission } });
   const transport = { async postService(service, input) {
-    if (service === "mfs.list") return { items: [{ ...root, nid: "2000000000000001", parent_id: root.nid, filename: "file.txt", filetype: "file" }] };
-    if (service === "mfs.get") return { ...input.node, parent_id: "0", filename: "Root", filetype: "root" };
+    if (service === "mfs.list") return { items: [accessible({ ...root, nid: "2000000000000001", parent_id: root.nid, filename: "file.txt", filetype: "file" })] };
+    if (service === "mfs.get") return accessible({ ...input.node, parent_id: "0", filename: "Root", filetype: "root" });
     throw new Error(`Unexpected service ${service}`);
   } };
   const mfs_client = new finder_api.MfsClient({ transport });

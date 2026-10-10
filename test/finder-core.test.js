@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const { FinderSelection } = require("../lib/finder-selection");
+const { FinderAccessPolicy } = require("../lib/access-policy");
 const { MfsSync } = require("../lib/mfs-sync");
 const { normalizedRectangle, intersects } = require("../lib/geometry");
 const { FinderTransferPolicy } = require("../lib/transfer-policy");
@@ -19,6 +20,11 @@ const { MfsClient } = require("../lib/mfs-client");
 const hub_x = "a000000000000001";
 const hub_y = "b000000000000002";
 const location_x = { hub_id: hub_x, nid: "1000000000000001" };
+const canonical_permission = { read: 2, write: 4, delete: 8, admin: 16, owner: 32 };
+
+function accessible(resource, { hub_privilege = 63, node_privilege = 63 } = {}) {
+  return { ...resource, access: { known: true, hub_privilege, node_privilege, permission: canonical_permission } };
+}
 
 test("MfsClient uses the canonical sources field for copy requests", async () => {
   let request;
@@ -32,12 +38,13 @@ test("MfsClient uses the canonical sources field for copy requests", async () =>
   });
 });
 
-test("public nodes normalize logical parents and exclude physical fields", () => {
-  const node = normalizePublicNode({ nid: "2000000000000001", parent_id: location_x.nid, filename: "safe.txt", filetype: "file", db_name: "private", storage_ref: "/private", payload_ref: { path: "/private" } }, hub_x);
+test("public nodes normalize logical parents, caller access and exclude private fields", () => {
+  const node = normalizePublicNode({ nid: "2000000000000001", parent_id: location_x.nid, filename: "safe.txt", filetype: "file", db_name: "private", storage_ref: "/private", payload_ref: { path: "/private" }, access: { known: true, hub_privilege: 3, node_privilege: 3, permission: { ...canonical_permission, domain_admin: 64 }, members: ["private"] } }, hub_x);
   assert.deepEqual(node.parent, location_x);
   assert.equal(node.db_name, undefined);
   assert.equal(node.storage_ref, undefined);
   assert.equal(node.payload_ref, undefined);
+  assert.deepEqual(node.access, { known: true, hub_privilege: 3, node_privilege: 3, permission: canonical_permission });
 });
 
 test("single, checkbox and drag semantics share one selection authority", () => {
@@ -90,12 +97,14 @@ test("move undo captures its source before awaiting and survives later navigatio
     location: { ...location_x },
     selection: { getItems: () => [item] },
     pending_operations: new Map(), items: new Map([[`${item.hub_id}:${item.nid}`, item]]), item_list: { remove() {} }, undo_stack: [],
+    access_policy: { transfer() { return { known: true, allowed: true, action: "move" }; }, async authorizeTransfer() { return { action: "move" }; }, async resolve(value) { return value; } },
     transfer_policy: { transfer: () => new Promise((resolve) => { complete = resolve; }) },
     presentError() {}, refresh: async () => {}, trigger() {},
     mfs_client: { async move(nodes, destination) { source.inverse = { nodes, destination }; } }
   };
   const target = { finder: source, location: { hub_id: hub_x, nid: "1000000000000002" } };
   const moving = Finder.prototype.transferTo.call(source, target);
+  await new Promise((resolve) => setImmediate(resolve));
   source.location = { hub_id: hub_x, nid: "1000000000000009" };
   complete({ ok: true });
   await moving;
@@ -109,8 +118,9 @@ test("failed moves create no undo entry and denied inverse remains retryable", a
   const source = {
     location: { ...location_x }, selection: { getItems: () => [item] }, pending_operations: new Map(),
     items: new Map([[`${item.hub_id}:${item.nid}`, item]]), item_list: { remove() {} }, undo_stack: [],
+    access_policy: { transfer() { return { known: true, allowed: true, action: "move" }; }, async authorizeTransfer() { return { action: "move" }; }, async resolve(value) { return value; } },
     transfer_policy: { async transfer() { throw Object.assign(new Error("denied"), { code: "PERMISSION_DENIED" }); } },
-    presentError(error, context) { source.error = { code: error.code, context }; }, refresh: async () => {}, trigger() {}
+    invalidateAccess() {}, reconcileAfterFailure: async () => {}, presentError(error, context) { source.error = { code: error.code, context }; }, refresh: async () => {}, trigger() {}
   };
   await assert.rejects(() => Finder.prototype.transferTo.call(source, { finder: source, location: { hub_id: hub_x, nid: "1000000000000002" } }), { code: "PERMISSION_DENIED" });
   assert.equal(source.undo_stack.length, 0);
@@ -119,6 +129,85 @@ test("failed moves create no undo entry and denied inverse remains retryable", a
   await assert.rejects(() => Finder.prototype.undoLast.call(source), { code: "PERMISSION_DENIED" });
   assert.equal(source.undo_stack.length, 1);
   assert.deepEqual(source.error, { code: "PERMISSION_DENIED", context: "undo" });
+});
+
+test("access policy derives move, copy and read-only UX from server permission DTOs", async () => {
+  const policy = new FinderAccessPolicy();
+  const destination_x = accessible({ hub_id: hub_x, nid: "1000000000000002", filetype: "folder" }, { node_privilege: 7 });
+  const destination_y = accessible({ hub_id: hub_y, nid: "1000000000000003", filetype: "folder" }, { node_privilege: 7 });
+  const read_only = accessible({ hub_id: hub_x, nid: "3000000000000004", parent_id: location_x.nid, filetype: "file" }, { node_privilege: 3 });
+  assert.equal(policy.evaluate("download", { items: [read_only] }).allowed, true);
+  assert.equal(policy.transfer({ items: [read_only], destination: destination_x }).action, "move");
+  assert.equal(policy.transfer({ items: [read_only], destination: destination_x }).allowed, false);
+  assert.equal(policy.transfer({ items: [read_only], destination: destination_x }).reason, "SOURCE_PERMISSION_DENIED");
+  assert.equal(policy.transfer({ items: [read_only], destination: destination_y }).action, "copy");
+  assert.equal(policy.transfer({ items: [read_only], destination: destination_y }).allowed, true);
+  assert.equal(policy.transfer({ items: [read_only], destination: accessible(destination_y, { node_privilege: 3 }) }).reason, "DESTINATION_PERMISSION_DENIED");
+  assert.equal(policy.transfer({ items: [read_only], destination: accessible({ ...location_x, filetype: "folder" }) }).action, "noop");
+});
+
+test("unknown access is resolved once per resource and remains bound to the requested target", async () => {
+  const calls = [];
+  const by_id = new Map([
+    ["source", accessible({ hub_id: hub_x, nid: "source", parent_id: location_x.nid }, { node_privilege: 15 })],
+    ["allowed", accessible({ hub_id: hub_x, nid: "allowed", filetype: "folder" }, { node_privilege: 7 })],
+    ["denied", accessible({ hub_id: hub_x, nid: "denied", filetype: "folder" }, { node_privilege: 3 })]
+  ]);
+  const policy = new FinderAccessPolicy({ mfs_client: { async get(resource) { calls.push(resource.nid); await new Promise((resolve) => setTimeout(resolve, resource.nid === "allowed" ? 10 : 1)); return by_id.get(resource.nid); } } });
+  const source = { hub_id: hub_x, nid: "source", parent_id: location_x.nid };
+  const allowed = { hub_id: hub_x, nid: "allowed" };
+  const denied = { hub_id: hub_x, nid: "denied" };
+  const [first, second] = await Promise.allSettled([
+    policy.authorizeTransfer({ items: [source], destination: allowed }),
+    policy.authorizeTransfer({ items: [source], destination: denied })
+  ]);
+  assert.equal(first.status, "fulfilled");
+  assert.equal(second.status, "rejected");
+  assert.equal(second.reason.decision.reason, "DESTINATION_PERMISSION_DENIED");
+  assert.equal(calls.filter((nid) => nid === "source").length, 1, "concurrent source resolution is coalesced");
+});
+
+test("access invalidation makes an in-flight permission response obsolete", async () => {
+  let release;
+  const policy = new FinderAccessPolicy({ mfs_client: { get(resource) { return new Promise((resolve) => { release = () => resolve(accessible(resource)); }); } } });
+  const resolving = policy.resolve({ hub_id: hub_x, nid: "stale-target" });
+  policy.invalidate();
+  release();
+  await assert.rejects(() => resolving, { code: "MFS_ACCESS_UNKNOWN" });
+});
+
+test("mixed transfer denial is all-or-nothing and same-parent drops issue no request or undo", async () => {
+  const allowed = accessible({ hub_id: hub_x, nid: "allowed", parent_id: location_x.nid }, { node_privilege: 15 });
+  const denied = accessible({ hub_id: hub_x, nid: "denied", parent_id: location_x.nid }, { node_privilege: 3 });
+  const destination = accessible({ hub_id: hub_x, nid: "destination" }, { node_privilege: 7 });
+  const policy = new FinderAccessPolicy();
+  assert.equal(policy.transfer({ items: [allowed, denied], destination }).allowed, false);
+  const requests = [];
+  const finder = {
+    location: { ...location_x }, current_node: accessible(location_x), selection: { getItems: () => [allowed] },
+    pending_operations: new Map(), items: new Map(), item_list: null, undo_stack: [],
+    access_policy: policy, transfer_policy: { async transfer(value) { requests.push(value); } }, presentError() {}, refresh: async () => {}, trigger() {}
+  };
+  const result = await Finder.prototype.transferTo.call(finder, { finder, location: { ...location_x }, resource: accessible(location_x) });
+  assert.equal(result.action, "noop");
+  assert.equal(requests.length, 0);
+  assert.equal(finder.undo_stack.length, 0);
+});
+
+test("undo checks current inverse rights before contacting the server", async () => {
+  let moved = 0;
+  const policy = new FinderAccessPolicy({ mfs_client: { async get(resource) {
+    return accessible(resource, { node_privilege: resource.nid === location_x.nid ? 7 : 3 });
+  } } });
+  const finder = {
+    undo_stack: [{ type: "move", items: [{ hub_id: hub_x, nid: "moved-after-revoke" }], destination: { ...location_x } }],
+    access_policy: policy,
+    mfs_client: { async move() { moved++; } },
+    presentError() {}, reconcileAfterFailure: async () => {}, trigger() {}
+  };
+  await assert.rejects(() => Finder.prototype.undoLast.call(finder), { code: "MFS_TRANSFER_UNAVAILABLE" });
+  assert.equal(moved, 0);
+  assert.equal(finder.undo_stack.length, 1);
 });
 
 test("MediaClient exposes allowlisted logical representation URLs only", () => {
@@ -177,6 +266,70 @@ test("MfsSync routes changes to the open node itself and binds only once", async
   sync.destroy();
   assert.deepEqual(bound.map(([name]) => name), ["mfs.event", "connected"]);
   assert.deepEqual(unbound.map(([name]) => name), ["mfs.event", "connected"]);
+});
+
+test("folder invalidations reconcile only matching views and preserve an invalidation received in flight", async () => {
+  const listeners = new Map();
+  const websocket = { bindEvent(name, fn) { listeners.set(name, fn); }, unbindEvent() {}, on(name, fn) { listeners.set(name, fn); }, off() {} };
+  const sync = new MfsSync({ websocket });
+  let release;
+  const calls = [];
+  const matching = {
+    finder_id: "matching", location: { ...location_x }, hasItem: () => false, applyMfsEvent() {},
+    invalidateMfsView() { calls.push("matching"); return calls.length === 1 ? new Promise((resolve) => { release = resolve; }) : Promise.resolve(); }
+  };
+  const unrelated = { finder_id: "unrelated", location: { hub_id: hub_x, nid: "unrelated" }, hasItem: () => false, applyMfsEvent() {}, invalidateMfsView() { calls.push("unrelated"); } };
+  sync.register(matching); sync.register(unrelated);
+  listeners.get("mfs.event")({ type: "node.moved", operation_id: "invalidate-1", reconcile: [location_x] });
+  listeners.get("mfs.event")({ type: "node.moved", operation_id: "invalidate-2", reconcile: [location_x] });
+  assert.deepEqual(calls, ["matching", "matching"]);
+  release();
+  assert.equal(calls.includes("unrelated"), false);
+  sync.destroy();
+});
+
+test("Finder reconciliation coalesces refreshes, retries after an in-flight invalidation and stops after destruction", async () => {
+  const pending = [];
+  const finder = {
+    destroyed: false, invalidation_serial: 0, reconciliation: null, errors: [],
+    invalidateAccess() {},
+    refresh() { return new Promise((resolve, reject) => pending.push({ resolve, reject })); },
+    presentError(error, context) { this.errors.push([error.message, context]); }
+  };
+  const first = Finder.prototype.invalidateMfsView.call(finder);
+  const same = Finder.prototype.invalidateMfsView.call(finder);
+  assert.equal(first, same);
+  pending.shift().resolve([]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pending.length, 1, "an invalidation received in flight schedules another refresh");
+  pending.shift().reject(new Error("refresh failed"));
+  await first;
+  assert.deepEqual(finder.errors, [["refresh failed", "reconciliation"]]);
+  finder.destroyed = true;
+  await Finder.prototype.invalidateMfsView.call(finder);
+  assert.equal(pending.length, 0);
+});
+
+test("a refresh completed after navigation cannot replace the new folder listing", async () => {
+  const pending = new Map();
+  const response = (kind, location) => new Promise((resolve) => pending.set(`${kind}:${location.nid}`, resolve));
+  const finder = {
+    destroyed: false, refresh_serial: 0, location: { ...location_x }, items: new Map(), next_cursor: null,
+    mfs_client: { list: (location) => response("list", location), get: (location) => response("get", location) },
+    item_list: { setItems(items) { finder.rendered = items; } },
+    mget() { return null; }, updateBreadcrumb() {}, trigger() {}
+  };
+  const old_refresh = Finder.prototype.refresh.call(finder);
+  finder.location = { hub_id: hub_x, nid: "1000000000000099" };
+  const new_refresh = Finder.prototype.refresh.call(finder);
+  pending.get("list:1000000000000099")({ items: [{ hub_id: hub_x, nid: "new-item", parent_id: "1000000000000099" }] });
+  pending.get("get:1000000000000099")({ hub_id: hub_x, nid: "1000000000000099", filename: "New" });
+  await new_refresh;
+  pending.get(`list:${location_x.nid}`)({ items: [{ hub_id: hub_x, nid: "old-item", parent_id: location_x.nid }] });
+  pending.get(`get:${location_x.nid}`)({ ...location_x, filename: "Old" });
+  await old_refresh;
+  assert.deepEqual(finder.rendered.map((item) => item.nid), ["new-item"]);
+  assert.equal(finder.current_title, "New");
 });
 
 test("mixed upload forest preserves explicit empty folders and uploads into real parent nids", async () => {

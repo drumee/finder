@@ -40,8 +40,12 @@ logical service contracts.
 ## Contracts
 
 Locations are `{hub_id,nid}`. Public nodes contain `{hub_id,nid,parent,
-filetype,filename}` plus bounded public presentation metadata. Physical paths,
-database names, storage references and transfer payload references are
+filetype,filename}` plus bounded public presentation metadata and the current
+caller's server-derived `access` contract. `access.known` distinguishes
+permission data that is unavailable from a known denial; known values contain
+the caller's effective Hub privilege word, effective node privilege word and
+the browser-safe canonical requested bits. Physical paths, database names,
+storage references, ACL membership and transfer payload references are
 excluded.
 
 Normal click replaces selection, the checkbox toggles membership, marquee
@@ -58,7 +62,11 @@ Finder does not buffer ZIP archives. Near-viewport previews request explicit
 allowlisted representations.
 
 MfsSync consumes recipient-filtered logical events, suppresses duplicate
-operation echoes, and reconciles open scopes after reconnect. A Finder owns
+operation echoes, and reconciles open scopes after reconnect. When a mutation
+cannot safely include the identity needed for an incremental update, the
+server sends only an authorized folder identity in `reconcile`; every Finder
+showing that folder refreshes it without learning the hidden mutation target.
+A Finder owns
 its sync registration, listeners and observers. `destroy()` is idempotent.
 Locally created transfer controllers are cancelled on destroy; injected
 controllers remain host-owned unless explicit ownership flags are set.
@@ -75,6 +83,6 @@ See `CONTRACTS.md` for the frozen API and resource ownership map.
 
 ## Package status
 
-This is an alpha CommonJS/Webpack capability. Version `0.1.0-alpha.3` is
+This is an alpha CommonJS/Webpack capability. Version `0.1.0-alpha.4` is
 prepared locally for the official Hub-context integration; this work does not
 publish it to npm.

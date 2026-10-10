@@ -1,6 +1,6 @@
 {
   "name": "@drumee/finder",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "Standalone logical MFS browsing capability for Drumee.",
   "license": "AGPL-3.0-only",
   "repository": { "type": "git", "url": "git+https://github.com/drumee/finder.git" },
